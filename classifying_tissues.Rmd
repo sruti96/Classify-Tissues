@@ -1,0 +1,420 @@
+---
+title: "GeneExpression"
+author: "Sruti Dammalapati (sd845)"
+date: "4/17/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysing High Dimensional Data
+
+Installing data package "tissuesGeneExpression" from genomicsclass github
+
+```{r include=FALSE}
+library(devtools)
+install_github("genomicsclass/tissuesGeneExpression", force = TRUE)
+
+# loading all required libraries
+library(tissuesGeneExpression)
+library(ggplot2)
+library(ggcorrplot)
+library(cluster)
+library(factoextra)
+library(ggplot2)
+library(ggdendro)
+library(rafalib)
+library(genefilter)
+library(tidyr)
+library(e1071)
+library(class)
+library(caret)
+```
+
+```{r}
+data(tissuesGeneExpression)
+
+# renaming data files
+expression.levels <- as.data.frame(e)
+patient.database <- as.data.frame(tab)
+tissue <- as.vector(tissue)
+
+# examining data
+head(expression.levels)
+head(patient.database)
+table(tissue)
+
+no.of.measurements <- dim(e)[1]
+no.of.patients <- dim(e)[2]
+```
+The data represents RNA expression levels for seven tissues (cerebellum, colon, endometrium, hippocampus, kidney, liver, placenta), each with several biological replicates. We call samples that we consider to be from the same population, such as liver tissue from different individuals, biological replicates.
+
+Dataframe 'tab' maps test candidates to the file name/ database ID for measued RNA expression levels. There are 189 participants and 22215 measurements for each individual.
+
+The gene expression data is contained in dataframe 'e'. Each column in tissue tells us what tissue is represented by e[,i], where i stands for the column index.
+
+```{r}
+# performing PCA on expression.levels for dimension reduction
+pca.result <- prcomp((apply(expression.levels,1,scale)))
+
+# standard deviation
+#pca.result$sdev
+#(pca.result$sdev / sum(pca.result$sdev))*100
+#summary(pca.result)
+
+# constructing a pca_df for ggplot function
+pca.df <- data.frame(pc.1 = pca.result$x[,1], pc.2 = pca.result$x[,2])
+
+pca.plot <- ggplot(pca.df, aes(pc.1, pc.2)) + 
+  geom_point(aes(pc.1, pc.2)) +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2") +
+  theme_bw()
+
+print(pca.plot)
+```
+
+```{r}
+# checking correlation 
+# computing distances between all columns in this table--
+
+#names = colnames(e)[c(1,10,20)]
+#tab[tab$filename %in% names,]$Tissue
+#d1 = sqrt(crossprod(e[,1]-e[,10]))
+#d2 = sqrt(crossprod(e[,1]-e[,20]))
+#distance between like tissues must be lesser
+#d1<d2
+#as.matrix(d_mat)[1,10] == d1
+#as.matrix(d_mat)[1,20] == d2
+# transposing e since samples must be placed row-wise
+
+distance.matrix <- dist(t(expression.levels))
+distance.matrix <- as.matrix(distance.matrix)
+n <- dim(distance.matrix)
+image(distance.matrix)
+ggsave("distance.png")
+
+correlation.matrix <- cor(t(expression.levels))
+#ggcorrplot(correlation.matrix[1:100, 1:100], method = "square")
+#ggsave("corr.png")
+```
+
+## Using Singular Value Decomposition (SVD) to transform data
+
+Principal components can be obtained using SVD. U⊤Y give us the principal components from the SVD. Since Y=UDV⊤, U⊤Y=VD and the variability of the columns are decreasing.
+
+```{r}
+# scaling data in e over rows: row means are subracted and values divded by the row standard deviations
+svd.components <- svd(t(apply(e,1,scale)))
+u <- svd.components$u
+v <- svd.components$v
+d <- diag(svd.components$d)
+
+# plotting component 'd'
+plot(svd.components$d)
+
+# getting row means
+row.means <- rowMeans(expression.levels)
+
+# extracting components- vector d and matrix v
+pc.1 <- svd.components$d[1]*svd.components$v[,1]
+pc.2 <- svd.components$d[2]*svd.components$v[,2]
+
+svd.df <- data.frame(pc.1, pc.2)
+
+svd.plot <- ggplot(svd.df, aes(pc.1, pc.2)) +
+              geom_point(aes(pc.1, pc.2)) + 
+              xlab("Principal Component 1") + 
+              ylab("Principal Component 2") + 
+              theme_bw()
+
+# calculating residuals
+# Y can be recovered in the following way-
+# Yhat <- u[,1:k] %*% d[1:k,1:k] %*% t(v[,1:k])
+# resid <- Y - Yhat 
+
+# calculating and plotting percent vairability to check how many columns are needed to capture max variability
+percent.variability <- svd.components$d^2/sum(svd.components$d^2)
+plot(percent.variability)
+plot(cumsum(svd.components$d^2)/sum(svd.components$d^2)*100)
+
+# finding index i where diff between real distances and approx distance (reduced dimension) < 10% 
+# disstance calculated between 3rd and 45th sample
+#z represents the principal components: z[1, ] = PC1 and z[2, ] = PC2
+z <- svd.components$d * t(svd.components$v)
+
+i <- 1:189
+real.distance <- sqrt(crossprod(expression.levels[, 3] - expression.levels[, 45]))
+approx.distance <- sapply(i,function(k){
+    sqrt(crossprod(z[1:k, 3, drop = FALSE] - z[1:k, 45, drop = FALSE] )) 
+  })
+
+percentdiff <- 100 * abs(approx.distance - real.distance)/real.distance
+plot(i,percentdiff) ##take a look
+min(i[which(percentdiff < 10)])
+
+# finding distances between all samples and third sample
+# apply cross product to find distances column-wise
+# distances = sqrt(apply(e[, -3] - e[, 3], 2, crossprod))
+# all rows in e reduced to first two rows in z
+# approxdistances = sqrt(apply(z[1:2, -3] - z[1:2, 3], 2, crossprod))
+# plot(distances, approxdistances)
+# cor(distances, approxdistances, method = "spearman")
+```
+
+
+```{r echo=TRUE}
+
+s <- svd(expression.levels - rowMeans(expression.levels))
+
+# plotting principal components 1 and 2
+pc.1 <- s$d[1] * s$v[,1]
+pc.2 <- s$d[2] * s$v[,2]
+
+tissues <- patient.database$Tissue
+
+pca.df <- data.frame(pc.1, pc.2)
+
+g1 <- ggplot(pca.df, aes(pc.1, pc.2)) + 
+  geom_point(aes(color = tissues)) + 
+  ggtitle("PCA") + 
+  xlab("PC1") + 
+  ylab("PC2") + 
+  theme_bw()
+
+# plotting principal components 3 and 4
+pc.3 <- s$d[3] * s$v[,3]
+pc.4 <- s$d[4] * s$v[,4]
+
+pca.df <- data.frame(pc.3, pc.4)
+
+g2 <- ggplot(pca.df, aes(pc.3, pc.4)) + 
+  geom_point(aes(color = tissues)) + 
+  ggtitle("PCA") + 
+  xlab("PC3") + 
+  ylab("PC4") + 
+  theme_bw()
+
+print(g1)
+print(g2)
+```
+
+```{r echo=TRUE}
+# d <- dist(t(mat))
+# mds <- cmdscale(d)
+# plot(mds[,1],mds[,2],bg=as.numeric(group),pch=21)
+# legend("bottomleft",levels(group),col=seq(along=levels(group)),pch=15,cex=1.5)
+# getting the PCs
+# mds <- cmdscale(d)
+# plot(mds[,1], mds[,2], col=km$cluster, pch=16)
+```
+
+k-means clustering to determine number of clusters given expression level data
+```{r}
+# scaling data
+df.scaled <- scale(t(expression.levels))
+# head(df, n = 3)
+
+# determining the optimal number of clusters to use
+k.max <- 20
+within.clusters.ss <- sapply(2:k.max, function(k){kmeans(df.scaled, k, nstart = 10 )$tot.withinss})
+print(within.clusters.ss)
+
+# plotting-
+plot(2:k.max, within.clusters.ss, type = "b", pch = 19,  xlab="Number of clusters K", ylab = "Total within-clusters sum of squares")
+
+# the kink in the plot at index 8, which could be the number of optimal clusters
+# another way to do this:
+# f = fviz_nbclust(df, kmeans, method = "wss") + geom_vline(xintercept = 3, linetype = 2)
+
+# R will try 25 different random starting assignments and then select the best results corresponding to the one with the lowest within cluster variation
+
+km <- kmeans(df.scaled, 7, nstart = 25)
+
+km$size
+
+table(tissue, cluster = km$cluster)
+
+df.clusters <- cbind(t(e), cluster = km$cluster)
+
+f <- fviz_cluster(km, df.clusters, ellipse.type = "norm", geom = "point") + theme_bw()
+print(f)
+```
+
+##Clustering
+
+Hierarchical cluster analysis
+```{r}
+
+# myplclust(hc, labels=tissue, lab.col=as.fumeric(tissue), cex=0.5)
+# hclusters <- cutree(hc, h=120)
+# table(tissue, cluster=hclusters)
+
+hc <- hclust(dist(t(expression.levels)))
+ggdendrogram(hc, rotate = FALSE, size = 2)
+model <- hclust(dist(t(expression.levels)))
+dhc <- as.dendrogram(model)
+
+# Rectangular lines
+ddata <- dendro_data(hc, type = "rectangle")
+
+# Enhanced hierarchical clustering
+#res.hc <- eclust(df.clusters, "hclust") # compute hclust
+#fviz_dend(res.hc, rect = TRUE) # dendrogam
+```
+
+## Heatmaps
+
+```{r}
+rv = rowVars(expression.levels)
+idx = order(-rv)[1:60]
+
+head(expression.levels[idx,])
+
+x = as.data.frame(cbind(scale(t(e[idx,])),DB = tab$filename))
+new_df = gather(data = x, key = Position, value = Expression_Level, -DB)
+head(new_df,20)
+
+#ids = sample(1:nrow(new_df), 50, replace=F)
+#sample_df = new_df[ids,]
+sample_df = new_df
+
+hmap <- ggplot(data = sample_df, aes(x = DB, y = Position, fill = Expression_Level)) + 
+  geom_tile(show.legend = FALSE) + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 5))
+
+ggsave("hmap.png")
+```
+
+## predicting tissues from GeneExpression Data
+```{r}
+table(tissue)
+
+# removing class placenta since there are very few samples in this class
+ind = which(tissue!="placenta")
+
+# using PCA to reduce the highly dimensional data to 4 principal components
+transformed.data = cbind(pc.1, pc.2, pc.3, pc.4)
+X = transformed.data[ind, ]
+#X = t(e[,ind])
+Y = tissue[ind]
+
+dataset = data.frame(X, tissues = Y)
+
+# creating a list of 80% of the rows in the original dataset we can use for training
+validation_index <- createDataPartition(Y, p=0.80, list=FALSE)
+# selecting 20% of the data for validation
+validation <- dataset[-validation_index,]
+# using the remaining 80% of data to training and testing the models
+dataset <- dataset[validation_index,]
+
+#summarizing the data
+dim(dataset)
+
+# list types for each attribute
+sapply(dataset, class)
+head(dataset)
+
+levels(dataset$tissues)
+#there are 7 levels. Therefore, this is a multi-class or a multinomial classification problem. If there were two levels, it would be a binary classification problem.
+
+#looking at the number of instances (rows) that belong to each class.
+percentage <- prop.table(table(dataset$tissues)) * 100
+cbind(freq=table(dataset$tissues), percentage=percentage)
+
+#summarizing-
+summary(dataset)
+
+# split input and output
+x <- dataset[,1:4]
+y <- dataset[,ncol(dataset)]
+
+#data visualization
+# boxplot for each attribute on one image
+par(mfrow=c(1,4))
+  for(i in 1:4) {
+  boxplot(dataset[,i], main=names(dataset)[i])
+  }
+
+barchart(y)
+
+# scatterplot matrix
+featurePlot(x=x, y=y, plot="ellipse")
+
+# box and whisker plots for each attribute
+featurePlot(x=x, y=y, plot="box")
+
+# density plots for each attribute by class value
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+featurePlot(x=x, y=y, plot="density", scales=scales)
+
+# Running algorithms using 10-fold cross validation
+control <- trainControl(method="cv", number=10)
+
+# using the metric of “Accuracy” to evaluate models. This is a ratio of the number of correctly predicted instances in divided by the total number of instances in the dataset multiplied by 100 to give a percentage (e.g. 95% accurate)
+
+metric <- "Accuracy"
+
+# evaluating 5 different algorithms: Linear Discriminant Analysis (LDA), Classification and Regression Trees (CART), k-Nearest Neighbors (kNN), Support Vector Machines (SVM) with a linear kernel, Random Forest (RF)
+
+# linear algorithms
+set.seed(7)
+fit.lda <- train(x, y, method="lda", metric=metric, trControl=control)
+
+# nonlinear algorithms
+# CART
+set.seed(7)
+fit.cart <- train(x, y, method="rpart", metric=metric, trControl=control)
+
+# kNN
+set.seed(7)
+fit.knn <- train(x, y, method="knn", metric=metric, trControl=control)
+
+# advanced algorithms
+# SVM
+set.seed(7)
+fit.svm <- train(x, y, method="svmRadial", metric=metric, trControl=control)
+
+# Random Forest
+set.seed(7)
+fit.rf <- train(x, y, method="rf", metric=metric, trControl=control)
+
+#summary of model 
+#summarize accuracy of models
+results <- resamples(list(lda=fit.lda, cart=fit.cart, knn=fit.knn, svm=fit.svm, rf=fit.rf))
+summary(results)
+
+# comparing accuracy of models
+dotplot(results)
+
+# summarizing Best Model
+print(fit.svm)
+
+# estimate skill of LDA on the validation dataset
+predictions <- predict(fit.lda, validation)
+confusionMatrix(predictions, validation$tissues)
+
+#library(caret)
+#set.seed(1)
+#idx <- createFolds(y, k=10)
+#examining y actual in each fold
+#sapply(idx, function(i) table(y[i]))
+#x <- cmdscale(dist(X))
+#plot(x[,1],x[,2],col=as.fumeric(y))
+#legend("topleft",levels(factor(y)),fill=seq_along(levels(factor(y))))
+
+err <- c()
+mean_error <- 0
+for (ki in 1:15){
+  for (i in 1:10){
+  pred <- knn(train =  x[-idx[[i]],], test = x[idx[[i]],], cl=y[-idx[[i]]], k=ki)
+  mean_error <- round(mean(y[ idx[[i]] ] != pred),3)
+  cat(mean_error,"\n")
+  err <- append(err,mean_error)
+  }
+  
+}
+plot(err)
+```
