@@ -1,1 +1,1 @@
-# Data Anlysis in R
+# Data Analysis in R
